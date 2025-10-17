@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>إهداء — قلب ألعاب نارية + أسئلة</title>
+    <meta name="theme-color" content="#000000" />
+    <style>
+      html, body { height: 100%; margin: 0; background: #000; color: #fff;
+        font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+      canvas { display:block; width:100vw; height:100vh; touch-action:none; }
+      .toolbar { position: fixed; top: 10px; left: 50%; transform: translateX(-50%);
+        display:flex; gap:8px; z-index:20; flex-wrap:wrap; justify-content:center; }
+      .btn { background: rgba(255,255,255,0.10); border: 1px solid rgba(255,255,255,0.20);
+        border-radius: 12px; color:#fff; font-size:14px; padding:8px 12px; cursor:pointer; }
+      .btn:active { background: rgba(255,255,255,0.22); }
+      .hint { position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%);
+        color:#9aa; font-size:12px; user-select:none; z-index:5; text-align:center; }
+      .overlay { position:fixed; inset:0; display:none; align-items:center; justify-content:center;
+        z-index:30; background:rgba(0,0,0,0.8); color:#fff; text-align:center; padding:20px; }
+      .card { width:min(92vw, 460px); background:rgba(20,20,20,0.9); border-radius:16px; padding:20px;
+        border:1px solid rgba(255,255,255,0.15); box-shadow:0 10px 40px rgba(0,0,0,0.6); }
+      .choices { display:flex; flex-wrap:wrap; gap:10px; justify-content:center; margin-top:14px; }
+      .choice { flex:1 1 auto; min-width:110px; padding:10px; border-radius:10px;
+        border:1px solid rgba(255,255,255,0.2); background:rgba(255,255,255,0.1); color:#fff; font-size:16px; }
+      .choice:active { background: rgba(255,255,255,0.25); }
+    </style>
+  </head>
+  <body>
+    <div class="toolbar">
+      <button id="modeBtn" class="btn">الوضع: رسم قلب</button>
+      <button id="clearBtn" class="btn">مسح</button>
+      <button id="colorBtn" class="btn">اللون: وردي</button>
+    </div>
+    <canvas id="c"></canvas>
+    <div class="hint" id="hint">انقر بأي مكان: صاروخ ⇢ انفجار قلب ✨ (يثبت 5 ثواني) — Esc للمسح</div>
+
+    <!-- وضع الأسئلة -->
+    <div class="overlay" id="overlay"><div class="card" id="card"></div></div>
+
+    <script>
+      // ===== Canvas / Retina =====
+      const canvas = document.getElementById('c');
+      const ctx = canvas.getContext('2d');
+      let DPR = Math.max(1, window.devicePixelRatio || 1);
+      function resize(){
+        const w = window.innerWidth, h = window.innerHeight;
+        canvas.width = Math.floor(w * DPR);
+        canvas.height = Math.floor(h * DPR);
+        canvas.style.width = w + 'px';
+        canvas.style.height = h + 'px';
+        ctx.setTransform(DPR,0,0,DPR,0,0);
+      }
+      resize();
+      window.addEventListener('resize', resize);
+
+      // ===== Controls =====
+      const clearBtn = document.getElementById('clearBtn');
+      const colorBtn = document.getElementById('colorBtn');
+      const modeBtn  = document.getElementById('modeBtn');
+      const hintEl   = document.getElementById('hint');
+      const overlay  = document.getElementById('overlay');
+      const card     = document.getElementById('card');
+
+      const palettes = [
+        {name:'وردي',   colors:['#ff3b6b','#ff7aa2','#ffc2d1']},
+        {name:'أحمر',   colors:['#ff4040','#ff7a7a','#ffd3d3']},
+        {name:'بنفسجي', colors:['#b974ff','#d1a6ff','#f0e0ff']},
+        {name:'أزرق',   colors:['#4ea8ff','#9cd1ff','#e0f0ff']},
+        {name:'ذهبي',   colors:['#ffd166','#ffe29a','#fff3cc']}
+      ];
+      let paletteIndex = 0;
+      function applyPalette(){ colorBtn.textContent = 'اللون: ' + palettes[paletteIndex].name; }
+      applyPalette();
+      colorBtn.onclick = () => { paletteIndex = (paletteIndex+1) % palettes.length; applyPalette(); };
+      clearBtn.onclick = () => { ctx.clearRect(0,0,canvas.width,canvas.height); };
+      document.addEventListener('keydown', (e)=>{
+        if(e.key === 'Escape') ctx.clearRect(0,0,canvas.width,canvas.height);
+      });
+
+      // ===== Helpers =====
+      const TWO_PI = Math.PI * 2;
+      const rand = (a,b)=> Math.random()*(b-a)+a;
+
+      // Parametric heart points (outline)
+      function heartPoints(count=720, scale=8){
+        const pts = [];
+        for(let i=0; i<count; i++){
+          const t = i/count * TWO_PI;
+          const x = 16*Math.pow(Math.sin(t),3);
+          const y = 13*Math.cos(t) - 5*Math.cos(2*t) - 2*Math.cos(3*t) - Math.cos(4*t);
+          pts.push({x:x*scale, y:-y*scale}); // invert Y for canvas
+        }
+        return pts;
+      }
+
+      // Random points inside heart (for inner twinkles)
+      function heartFillPoints(count=250, scale=8){
+        const fill=[];
+        let tries=0;
+        while(fill.length < count && tries < count*10){
+          tries++;
+          const x = rand(-16,16), yProbe = rand(-17,13);
+          // Implicit heart inequality approximation (scaled)
+          const a = x*x + (5/4)*yProbe*yProbe - 1;
+          if(a*a*a - x*x*yProbe*yProbe*yProbe <= 0){ // inside-ish
+            fill.push({x:x*scale, y:-yProbe*scale});
+          }
+        }
+        return fill;
+      }
+
+      // ===== Particles =====
+      class Particle{
+        constructor(x,y,vx,vy,color,lifeMs){
+          this.x=x; this.y=y; this.vx=vx; this.vy=vy;
+          this.color=color; this.life=lifeMs; this.t=0; this.dead=false;
+        }
+        step(dt){
+          this.t += dt;
+          if(this.t >= this.life){ this.dead = true; return; }
+          this.vx *= 0.985;
+          this.vy = this.vy*0.985 + 0.040; // slight gravity
+          this.x += this.vx;
+          this.y += this.vy;
+        }
+        draw(ctx){
+          const p = 1 - this.t/this.life;
+          ctx.globalAlpha = Math.max(0, p);
+          ctx.beginPath();
+          ctx.arc(this.x, this.y, 2.0*p, 0, TWO_PI);
+          ctx.fillStyle = this.color;
+          ctx.fill();
+        }
+      }
+
+      // يرسم حدّ القلب تدريجيًا ثم يثبّت holdMs
+      class StrokeTracer{
+        constructor(cx,cy, pts, color, drawSpeedPtsPerFrame=3, holdMs=5000){
+          this.cx=cx; this.cy=cy; this.pts=pts; this.i=0;
+          this.speed = drawSpeedPtsPerFrame;
+          this.color=color;
+          this.done=false;
+          this.holdEnd = null; // timestamp when expires
+          this.holdMs = holdMs;
+        }
+        step(nowMs){
+          if(!this.done){
+            this.i += this.speed;
+            if(this.i >= this.pts.length){
+              this.i = this.pts.length;
+              this.done = true;
+              this.holdEnd = nowMs + this.holdMs; // يثبت
+            }
+          }
+        }
+        draw(ctx){
+          ctx.save();
+          ctx.translate(this.cx, this.cy);
+          ctx.lineWidth = 3.0;
+          ctx.strokeStyle = this.color;
+          ctx.lineJoin = 'round';
+          ctx.lineCap  = 'round';
+          ctx.shadowColor = this.color;
+          ctx.shadowBlur  = 16;
+          ctx.beginPath();
+          for(let k=0; k<this.i; k++){
+            const p = this.pts[k];
+            if(k===0) ctx.moveTo(p.x, p.y);
+            else ctx.lineTo(p.x, p.y);
+          }
+          ctx.stroke();
+          ctx.restore();
+        }
+        isExpired(nowMs){
+          return this.done && this.holdEnd !== null && nowMs >= this.holdEnd;
+        }
+      }
+
+      // ===== Firework system (HEART-SHAPED) =====
+      const fireworks = [];
+
+      function launchHeartTo(x,y, {heartScale=8, drawSpeed=3, holdMs=5000} = {}){
+        // صاروخ يصعد للمكان المحدد ثم ينفجر على شكل قلب مباشر
+        const startX = x + rand(-40,40);
+        const startY = canvas.height / DPR + 30;
+        const rocket = { x:startX, y:startY, vx:(x-startX)/80, vy:(y-startY)/80, life:80, t:0 };
+        const trail = [];
+        const palette = palettes[paletteIndex].colors;
+        const hue = palette[0];
+        const outline = heartPoints(720, heartScale);
+        const fillPts = heartFillPoints(220, heartScale*0.9);
+
+        function explode(cx,cy){
+          const parts=[];
+          // شرارات على حدود القلب مباشرة (بدون جذب لاحق)
+          for(let i=0;i<outline.length;i+=2){
+            const p = outline[i];
+            const ang = rand(0, TWO_PI);
+            const spd = rand(0.4, 1.4); // بطيء علشان يبان الشكل
+            const col = palette[(Math.random()*palette.length)|0];
+            parts.push(new Particle(cx+p.x, cy+p.y, Math.cos(ang)*spd, Math.sin(ang)*spd, col, rand(900,1400)));
+          }
+          // وميض داخلي خفيف
+          for(const p of fillPts){
+            const col = palette[(Math.random()*palette.length)|0];
+            parts.push(new Particle(cx+p.x+rand(-2,2), cy+p.y+rand(-2,2), rand(-0.3,0.3), rand(-0.6,0.2), col, rand(700,1100)));
+          }
+          // متتبّع الحدود — رسم بطيء + تثبيت
+          const tracer = new StrokeTracer(cx, cy, outline, hue, drawSpeed, holdMs);
+          fireworks.push({ phase:'heart', parts, tracer });
+        }
+
+        fireworks.push({ phase:'rocket', rocket, trail, explode });
+      }
+
+      // Click/touch in DRAW mode
+      function clickPos(e){
+        const rect = canvas.getBoundingClientRect();
+        return {
+          x: (e.clientX ?? e.touches?.[0]?.clientX) - rect.left,
+          y: (e.clientY ?? e.touches?.[0]?.clientY) - rect.top
+        };
+      }
+      canvas.addEventListener('click', (e)=>{ if(mode!=='draw') return;
+        const {x,y} = clickPos(e);
+        launchHeartTo(x,y, { heartScale: 8, drawSpeed: 3, holdMs: 5000 });
+      });
+      canvas.addEventListener('touchstart', (e)=>{ if(mode!=='draw') return;
+        e.preventDefault();
+        const {x,y} = clickPos(e);
+        launchHeartTo(x,y, { heartScale: 8, drawSpeed: 3, holdMs: 5000 });
+      }, {passive:false});
+
+      // Main loop
+      function tick(nowMs){
+        requestAnimationFrame(tick);
+        // trail fade
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = 'rgba(0,0,0,0.22)';
+        ctx.fillRect(0,0,canvas.width/DPR,canvas.height/DPR);
+        ctx.globalCompositeOperation = 'lighter';
+
+        for(let i=fireworks.length-1; i>=0; i--){
+          const fw = fireworks[i];
+
+          if(fw.phase === 'rocket'){
+            const r = fw.rocket; r.t++;
+            // trail
+            fw.trail.push({x:r.x, y:r.y, a:1});
+            for(let t=0; t<fw.trail.length; t++){
+              const tr = fw.trail[t]; tr.a *= 0.95;
+              ctx.globalAlpha = tr.a;
+              ctx.fillStyle = palettes[paletteIndex].colors[0];
+              ctx.beginPath(); ctx.arc(tr.x, tr.y, 1.5, 0, TWO_PI); ctx.fill();
+            }
+            // move
+            r.x += r.vx; r.y += r.vy; r.vy += 0.02;
+            // head
+            ctx.globalAlpha = 1;
+            ctx.fillStyle = '#fff';
+            ctx.beginPath(); ctx.arc(r.x, r.y, 2, 0, TWO_PI); ctx.fill();
+            if(r.t >= r.life){
+              fw.explode(r.x, r.y);
+              fireworks.splice(i,1);
+            }
+
+          } else if(fw.phase === 'heart'){
+            // particles of heart
+            let alive = 0;
+            for(let k=fw.parts.length-1; k>=0; k--){
+              const p = fw.parts[k];
+              p.step(16.7);
+              if(!p.dead){ p.draw(ctx); alive++; } else { fw.parts.splice(k,1); }
+            }
+            // tracer
+            if(fw.tracer && !fw.tracer.isExpired(nowMs || performance.now())){
+              fw.tracer.step(nowMs || performance.now());
+              fw.tracer.draw(ctx);
+            }
+            if(alive===0 && (!fw.tracer || fw.tracer.isExpired(nowMs || performance.now()))){
+              fireworks.splice(i,1);
+            }
+          }
+        }
+        ctx.globalAlpha = 1;
+      }
+      requestAnimationFrame(tick);
+
+      // ===== QUIZ MODE =====
+      let mode = 'draw'; // draw | quiz
+      function setCard(html){ card.innerHTML = html; }
+      function showOverlay(){ overlay.style.display = 'flex'; }
+      function hideOverlay(){ overlay.style.display = 'none'; }
+
+      function showReady(){
+        setCard(`
+          <h3>جاهزة؟</h3>
+          <p>عندي لك سؤالين لطيفين 💬</p>
+          <div class="choices">
+            <button class="choice" id="ok">اي</button>
+            <button class="choice" id="later">بعدين</button>
+          </div>
+        `);
+        document.getElementById('ok').onclick = showLove;
+        document.getElementById('later').onclick = () => {
+          mode = 'draw';
+          modeBtn.textContent = 'الوضع: رسم قلب';
+          hideOverlay();
+          hintEl.textContent = 'انقر بأي مكان: صاروخ ⇢ انفجار قلب ✨ (يثبت 5 ثواني) — Esc للمسح';
+        };
+        showOverlay();
+      }
+
+      function showLove(){
+        setCard(`
+          <h3>تحبيني؟</h3>
+          <div class="choices">
+            <button class="choice" id="yes">اي</button>
+            <button class="choice" id="no">لا</button>
+          </div>
+        `);
+        document.getElementById('yes').onclick = showHowMuch;
+        document.getElementById('no').onclick  = () => {
+          setCard(`
+            <h3>😢 يا قاسي!</h3>
+            <div class="choices"><button class="choice" id="back">رجوع</button></div>
+          `);
+          document.getElementById('back').onclick = showLove;
+        };
+      }
+
+      function showHowMuch(){
+        setCard(`
+          <h3>شقد تحبيني؟</h3>
+          <div class="choices">
+            <button class="choice" data-v="واجد">واجد</button>
+            <button class="choice" data-v="شوي">شوي</button>
+            <button class="choice" data-v="وسط">وسط</button>
+            <button class="choice" data-v="الى ماله حدود">الى ماله حدود</button>
+          </div>
+        `);
+        card.querySelectorAll('.choice').forEach(btn=>{
+          btn.onclick = ()=>{
+            const v = btn.getAttribute('data-v');
+            if(v === 'الى ماله حدود'){
+              // ===== عرض قلوب في "مكان واحد" وبشكل قلب لمدة 5 ثواني =====
+              const center = { x: canvas.width/(2*DPR), y: canvas.height/(2*DPR) }; // مكان واحد (منتصف)
+              megaHeartAt(center.x, center.y, 5000); // 5 ثواني
+              hideOverlay();
+              // نُبقي الزر لتبديل الوضع — المستخدم يقدر يرجع للرسم من الزر
+              mode = 'draw';
+              modeBtn.textContent = 'الوضع: رسم قلب';
+              hintEl.textContent = 'انقر بأي مكان: صاروخ ⇢ انفجار قلب ✨ (يثبت 5 ثواني) — Esc للمسح';
+            } else {
+              setCard(`
+                <h3>يا سلام! (${v}) 💖</h3>
+                <div class="choices"><button class="choice" id="finish">رجوع</button></div>
+              `);
+              document.getElementById('finish').onclick = () => {
+                hideOverlay();
+                mode = 'draw';
+                modeBtn.textContent = 'الوضع: رسم قلب';
+                hintEl.textContent = 'انقر بأي مكان: صاروخ ⇢ انفجار قلب ✨ (يثبت 5 ثواني) — Esc للمسح';
+              };
+            }
+          };
+        });
+      }
+
+      function toggleMode(next){
+        if(next) mode = next;
+        else mode = (mode === 'draw') ? 'quiz' : 'draw';
+        if(mode === 'quiz'){
+          modeBtn.textContent = 'الوضع: أسئلة';
+          hintEl.textContent = 'وضع الأسئلة فعّال — اتبع الاختيارات على البطاقة';
+          showReady();
+        } else {
+          modeBtn.textContent = 'الوضع: رسم قلب';
+          hintEl.textContent = 'انقر بأي مكان: صاروخ ⇢ انفجار قلب ✨ (يثبت 5 ثواني) — Esc للمسح';
+          hideOverlay();
+        }
+      }
+      modeBtn.addEventListener('click', ()=> toggleMode());
+
+      // ===== Mega Heart at ONE PLACE for DURATION (for unlimited) =====
+      // يطلق عدة صواريخ إلى نفس النقطة (مكان واحد) وكل انفجار قلب، لمدة ms ثم يتوقف
+      function megaHeartAt(x, y, durationMs=5000){
+        const start = performance.now();
+        function burst(now){
+          if(now - start >= durationMs) return;
+          // 2–3 إطلاقات إلى نفس المكان كل دفعة
+          const batch = Math.floor(rand(2, 4));
+          for(let i=0;i<batch;i++){
+            launchHeartTo(x, y, { heartScale: 8, drawSpeed: 3, holdMs: 5000 });
+          }
+          setTimeout(()=> requestAnimationFrame(burst), 180); // دفعات متتالية خلال 5 ثواني
+        }
+        requestAnimationFrame(burst);
+      }
+    </script>
+  </body>
+</html>
